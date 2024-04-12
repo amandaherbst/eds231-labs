@@ -1,7 +1,7 @@
 ---
 title: "Lab 2: Sentiment Analysis I"
-author: "Your Name"
-date: "2024-04-10"
+author: "Amanda Herbst"
+date: "2024-04-16"
 output: html_document
 ---
 
@@ -33,14 +33,15 @@ setwd(here("data/offshore_wind_articles")) #where the .docxs live
 post_files <- list.files(pattern = ".docx", path = getwd(),
                       full.names = TRUE, recursive = TRUE, ignore.case = TRUE)
 
-wind_lnt <- lnt_read(post_files, remove_cover = FALSE) # read list of file paths into an lnt object
+# read list of file paths into an lnt object
+wind_lnt <- lnt_read(post_files, remove_cover = FALSE) 
 
 # @ shows the objects in each "slot" of the S4 object
 meta_df <- wind_lnt@meta
 articles_df <- wind_lnt@articles
 paragraphs_df <- wind_lnt@paragraphs
 
-# create new dataframe with pieces of what we wnat to use from above
+# create new dataframe with pieces of what we want to use from above
 wind_df <- tibble(Date = meta_df$Date,
                Headline = meta_df$Headline,
                id = articles_df$ID,
@@ -55,10 +56,118 @@ wind_df <- tibble(Date = meta_df$Date,
 
 -   Remove any clear duplicate articles. LNT has a method for this, but it doesn't seem to work, so you probably need to do it manually.
 
+```{r}
+length(unique(wind_df$Headline))
+```
+
+**No duplicate articles!**
+
 ### Explore your data and conduct the following analyses:
 
+```{r get_sentiments}
+#load the bing and nrc sentiment lexicon from tidytext
+bing_sent <- get_sentiments("bing")
+nrc_sent <- get_sentiments("nrc")
+```
+
 1.  Calculate mean sentiment across all your articles
+```{r}
+# tokenize words in articles
+wind_tokenized <- wind_df %>% 
+  unnest_tokens(output = word, input = text, token = "words") # words is the default for token
+
+# Convert sentiment to a simple numerical score
+wind_token_num <- wind_tokenized %>% 
+  # remove stop words
+  anti_join(stop_words, by = "word") %>% 
+  # only keep words that have a designated sentiment in bing lexicon
+  inner_join(bing_sent, by = "word") %>% 
+  # convert positive and negative to numbers
+  mutate(sent_num = case_when(
+    sentiment == "negative" ~ -1,
+    sentiment == "positive" ~ 1
+  ))
+
+wind_sent <- wind_token_num %>% 
+  group_by(Headline) %>% 
+  count(id, sentiment) %>% 
+  pivot_wider(names_from = sentiment, values_from = n) %>% 
+  mutate(polarity = positive - negative)
+  
+#Mean polarity
+mean(wind_sent$polarity, na.rm = TRUE)
+```
+
+**There's about 2 more positive words per article than negative.**
+
 2.  Sentiment by article plot. The one provided in class needs significant improvement.
+```{r}
+# dodged bar plot of number of neg and pos for each article... not great
+wind_token_num %>% 
+  group_by(Headline) %>% 
+  count(id, sentiment) %>% 
+  ggplot(aes(x = id, y = n, fill = sentiment)) +
+  geom_col(position = "dodge")
+```
+
+
 3.  Most common nrc emotion words and plot by emotion
+```{r, warning = FALSE}
+# count number of unique combinations of words and emotions
+nrc_word_counts <- wind_tokenized %>% 
+  anti_join(stop_words, by = "word") %>% 
+  inner_join(nrc_sent, by = "word") %>% 
+  count(word, sentiment, sort = TRUE)
+
+# identify top 5 words per emotion
+sent_counts <- nrc_word_counts %>% 
+  group_by(sentiment) %>% 
+  slice_max(n, n=5) %>% # top 5 words per emotion
+  ungroup() %>% 
+  mutate(word = reorder(word, n))
+  
+#plot sent_counts  
+sent_counts %>% 
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Number of Ocurrences") +
+  theme_bw()
+```
+
+
 4.  Look at the nrc contribution to emotion by word plots. Identify and reclassify or remove at least one term that gives misleading results in your context.
+
+**misleading words: trump, including**
+```{r}
+nrc_word_counts <- nrc_word_counts %>% 
+  filter(!word %in% c("trump", "including"))
+
+# identify top 5 words per emotion
+sent_counts <- nrc_word_counts %>% 
+  group_by(sentiment) %>% 
+  slice_max(n, n=5) %>% # top 5 words per emotion
+  ungroup() %>% 
+  mutate(word = reorder(word, n))
+  
+#plot sent_counts  
+sent_counts %>% 
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Number of Ocurrences") +
+  theme_bw()
+```
+
+
 5.  Plot the amount of nrc emotion words as a percentage of all the emotion words used each day (aggregate text from articles published on the same day). How does the distribution of emotion words change over time? Can you think of any reason this would be the case?
+```{r}
+wind_tokenized %>% 
+  anti_join(stop_words, by = "word") %>% 
+  inner_join(nrc_sent, by = "word") %>% 
+  count(Date, sentiment) %>% 
+  ggplot(aes(x = Date, y = n, color = sentiment)) +
+  geom_line(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y")
+```
+
